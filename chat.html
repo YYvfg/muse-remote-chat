@@ -49,7 +49,10 @@ const BACKOFF = [30000, 60000, 120000];
 let etag = localStorage.getItem("chat_etag") || null;
 let backoffStep = 0;
 let timer = null;
-let pendingIds = JSON.parse(localStorage.getItem("pending_ids") || "[]");
+// pending 存完整消息 {id, text, ts}，iOS 切到邮件 App 回来可能重载页面，
+// 只存 id 会导致待发送消息在重载后不可见
+let pendings = JSON.parse(localStorage.getItem("pendings") || "[]");
+function savePendings(){try{localStorage.setItem("pendings",JSON.stringify(pendings));}catch(e){}}
 
 function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
 function uuid(){return "xxxxxxxxxxxx".replace(/x/g,()=>Math.floor(Math.random()*16).toString(16));}
@@ -58,14 +61,17 @@ function showHint(t){const h=document.getElementById("hint");h.textContent=t;h.s
 function render(data){
   const box=document.getElementById("msgs");
   const seen=new Set((data.messages||[]).map(m=>m.id));
-  // 待发送的消息如果已出现在服务端，去掉 pending
-  pendingIds=pendingIds.filter(id=>!seen.has(id));
-  localStorage.setItem("pending_ids",JSON.stringify(pendingIds));
+  // 已出现在服务端的去掉 pending
+  pendings=pendings.filter(p=>!seen.has(p.id));
+  savePendings();
   let html="";
   (data.messages||[]).forEach(m=>{
     const who=m.from==="muse"?"muse":"user";
-    const pend=pendingIds.includes(m.id)?' <span style="color:#999">（待发送）</span>':"";
-    html+='<div class="msg '+who+'">'+esc(m.text)+'<div class="meta">'+esc(m.ts||"")+pend+'</div></div>';
+    html+='<div class="msg '+who+'">'+esc(m.text)+'<div class="meta">'+esc(m.ts||"")+'</div></div>';
+  });
+  // 还没上服务端的待发送消息也渲染出来，重载页面后不会"消失"
+  pendings.forEach(p=>{
+    html+='<div class="msg user pending">'+esc(p.text)+'<div class="meta">'+esc(p.ts||"")+' · 待发送</div></div>';
   });
   box.innerHTML=html;
   box.scrollTop=box.scrollHeight;
@@ -112,8 +118,8 @@ document.getElementById("send").onclick=()=>{
   const id=uuid();
   const ts=new Date().toLocaleString("zh-CN",{hour12:false});
   const body="[chat-id:"+id+"]\n["+ts+"]\n"+text;
-  pendingIds.push(id);
-  localStorage.setItem("pending_ids",JSON.stringify(pendingIds));
+  pendings.push({id:id,text:text,ts:ts});
+  savePendings();
   const box=document.getElementById("msgs");
   box.innerHTML+='<div class="msg user pending">'+esc(text)+'<div class="meta">待发送</div></div>';
   box.scrollTop=box.scrollHeight;
