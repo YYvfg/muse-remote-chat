@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Muse</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:#f5f5f5;display:flex;flex-direction:column;height:100dvh}
+header{background:#fff;padding:12px 16px;border-bottom:1px solid #e5e5e5;display:flex;align-items:center;gap:10px}
+header .dot{width:10px;height:10px;border-radius:50%;background:#ccc}
+header .dot.on{background:#07c160}
+header .title{font-weight:600;font-size:16px}
+header .sub{font-size:12px;color:#888;margin-left:auto}
+#msgs{flex:1;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}
+.msg{max-width:80%;padding:8px 12px;border-radius:12px;font-size:15px;line-height:1.5;word-break:break-word;white-space:pre-wrap}
+.msg.muse{background:#fff;align-self:flex-start;border:1px solid #eee}
+.msg.user{background:#95ec69;align-self:flex-end}
+.msg .meta{font-size:11px;color:#999;margin-top:4px}
+.msg.pending{opacity:.65}
+#bar{display:flex;gap:8px;padding:10px;background:#fff;border-top:1px solid #e5e5e5}
+#inp{flex:1;border:1px solid #ddd;border-radius:20px;padding:9px 14px;font-size:15px;outline:none}
+#send{background:#07c160;color:#fff;border:none;border-radius:20px;padding:9px 20px;font-size:15px}
+#send:disabled{opacity:.5}
+#hint{text-align:center;font-size:12px;color:#07c160;padding:6px;display:none;background:#f0faf4}
+</style>
+</head>
+<body>
+<header>
+  <div class="dot" id="dot"></div>
+  <div class="title">Muse</div>
+  <div class="sub" id="sub">连接中…</div>
+</header>
+<div id="hint"></div>
+<div id="msgs"></div>
+<div id="bar">
+  <input id="inp" placeholder="输入消息…" autocomplete="off">
+  <button id="send">发送</button>
+</div>
+<script>
+// 配置：公开仓库，匿名读取，无需任何 key（PAT 绝不进网页）
+const REPO = "YYvfg/muse-remote-chat";
+const API = "https://api.github.com/repos/" + REPO + "/contents/chat.json";
+const TO = "lyf1538709706@gmail.com";
+const SUBJECT = "[MuseChat]";
+const POLL_OK = 20000;          // 正常轮询 20 秒（GPT review）
+const BACKOFF = [30000, 60000, 120000];
+
+let etag = localStorage.getItem("chat_etag") || null;
+let backoffStep = 0;
+let timer = null;
+let pendingIds = JSON.parse(localStorage.getItem("pending_ids") || "[]");
+
+function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+function uuid(){return "xxxxxxxxxxxx".replace(/x/g,()=>Math.floor(Math.random()*16).toString(16));}
+function showHint(t){const h=document.getElementById("hint");h.textContent=t;h.style.display="block";setTimeout(()=>h.style.display="none",4000);}
+
+function render(data){
+  const box=document.getElementById("msgs");
+  const seen=new Set((data.messages||[]).map(m=>m.id));
+  // 待发送的消息如果已出现在服务端，去掉 pending
+  pendingIds=pendingIds.filter(id=>!seen.has(id));
+  localStorage.setItem("pending_ids",JSON.stringify(pendingIds));
+  let html="";
+  (data.messages||[]).forEach(m=>{
+    const who=m.from==="muse"?"muse":"user";
+    const pend=pendingIds.includes(m.id)?' <span style="color:#999">（待发送）</span>':"";
+    html+='<div class="msg '+who+'">'+esc(m.text)+'<div class="meta">'+esc(m.ts||"")+pend+'</div></div>';
+  });
+  box.innerHTML=html;
+  box.scrollTop=box.scrollHeight;
+  const dot=document.getElementById("dot"),sub=document.getElementById("sub");
+  if(data.heartbeat){
+    const sec=Math.floor((Date.now()-new Date(data.heartbeat).getTime())/1000);
+    if(sec<90){dot.className="dot on";sub.textContent="在线 · 最后心跳 "+sec+" 秒前";}
+    else{dot.className="dot";sub.textContent="离线 · 最后心跳 "+Math.floor(sec/60)+" 分钟前";}
+  } else {dot.className="dot";sub.textContent="离线";}
+  try{localStorage.setItem("chat_cache",JSON.stringify(data));}catch(e){}
+}
+
+async function poll(){
+  clearTimeout(timer);
+  try{
+    const headers={"Accept":"application/vnd.github.raw"};
+    if(etag)headers["If-None-Match"]=etag;
+    const r=await fetch(API,{headers:headers});
+    if(r.status===200){
+      etag=r.headers.get("ETag");
+      if(etag)localStorage.setItem("chat_etag",etag);
+      backoffStep=0;
+      render(await r.json());
+      timer=setTimeout(poll,POLL_OK);
+    }else if(r.status===304){
+      backoffStep=0;  // 304 正常，不重新解析
+      timer=setTimeout(poll,POLL_OK);
+    }else if(r.status===403||r.status===429){
+      const wait=BACKOFF[Math.min(backoffStep,BACKOFF.length-1)];
+      backoffStep++;
+      timer=setTimeout(poll,wait);
+    }else{
+      timer=setTimeout(poll,30000);
+    }
+  }catch(e){
+    timer=setTimeout(poll,30000);  // 网络失败 30 秒后重试
+  }
+}
+
+document.getElementById("send").onclick=()=>{
+  const inp=document.getElementById("inp");
+  const text=inp.value.trim();
+  if(!text)return;
+  const id=uuid();
+  const ts=new Date().toLocaleString("zh-CN",{hour12:false});
+  const body="[chat-id:"+id+"]\n["+ts+"]\n"+text;
+  pendingIds.push(id);
+  localStorage.setItem("pending_ids",JSON.stringify(pendingIds));
+  const box=document.getElementById("msgs");
+  box.innerHTML+='<div class="msg user pending">'+esc(text)+'<div class="meta">待发送</div></div>';
+  box.scrollTop=box.scrollHeight;
+  inp.value="";
+  window.location.href="mailto:"+TO+"?subject="+encodeURIComponent(SUBJECT)+"&body="+encodeURIComponent(body);
+  showHint("已打开邮件，请点击发送");
+};
+document.getElementById("inp").addEventListener("keydown",e=>{if(e.key==="Enter")document.getElementById("send").click();});
+
+// 秒开：先画缓存
+try{const c=localStorage.getItem("chat_cache");if(c)render(JSON.parse(c));}catch(e){}
+poll();
+</script>
+</body>
+</html>
