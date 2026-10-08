@@ -110,7 +110,18 @@ async function poll(){
       render(await r.json());
       timer=setTimeout(poll,POLL_OK);
     }else if(r.status===304){
-      backoffStep=0;  // 304 正常，不重新解析
+      backoffStep=0;
+      // 304 时也用缓存数据过一遍 pending，避免"待发送"卡死
+      try{
+        const c=localStorage.getItem("chat_cache");
+        if(c){
+          const data=JSON.parse(c);
+          const seen=new Set((data.messages||[]).map(m=>m.id));
+          const before=pendings.length;
+          pendings=pendings.filter(p=>!seen.has(p.id));
+          if(pendings.length!==before){ savePendings(); render(data); }
+        }
+      }catch(e){}
       timer=setTimeout(poll,POLL_OK);
     }else if(r.status===403||r.status===429){
       const wait=BACKOFF[Math.min(backoffStep,BACKOFF.length-1)];
