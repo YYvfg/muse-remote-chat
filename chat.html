@@ -50,7 +50,7 @@ const MQTT_TOPIC = "muse-chat/relay/859456181adb8c25292dbe06aa0f06bd";
 const MQTT_USER = "webpub";
 const MQTT_PASS = "f17134d2dee4aafdea910ad9319cf364";  // webpub 受限用户（仅发布到 relay topic）
 const MQTT_TIMEOUT = 4000;      // 4 秒连不上/发不出就回退到邮件，保证体验
-const POLL_OK = 20000;          // 正常轮询 20 秒（GPT review）
+const POLL_OK = 5000;           // 正常轮询 5 秒（304 不计 GitHub 限额，放心刷）
 const BACKOFF = [30000, 60000, 120000];
 
 let etag = localStorage.getItem("chat_etag") || null;
