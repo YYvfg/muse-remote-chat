@@ -59,6 +59,12 @@ let timer = null;
 // pending 存完整消息 {id, text, ts}，iOS 切到邮件 App 回来可能重载页面，
 // 只存 id 会导致待发送消息在重载后不可见
 let pendings = JSON.parse(localStorage.getItem("pendings") || "[]");
+// 启动时清理超过 5 分钟的陈旧 pending（之前版本没有超时机制，可能卡死在"待发送"）
+const _now = Date.now();
+pendings = pendings.filter(p => {
+  const t = p.ts ? new Date(p.ts).getTime() : 0;
+  return !t || (_now - t) < 5 * 60 * 1000;
+});
 function savePendings(){try{localStorage.setItem("pendings",JSON.stringify(pendings));}catch(e){}}
 
 function esc(s){return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
