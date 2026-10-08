@@ -133,7 +133,22 @@ function sendViaMail(id, text, ts){
 function sendViaMqtt(id, text, ts, fallback){
   if(typeof mqtt==="undefined"){ fallback(); return; }  // CDN 被挡
   let done=false;
-  const finish=(ok)=>{ if(done)return; done=true; mqttCleanup(); ok?showHint("已发送"):fallback(); };
+  const finish=(ok)=>{
+    if(done)return; done=true; mqttCleanup();
+    if(ok){
+      showHint("已发送");
+      // 发送成功后立即拉一次，不等 5 秒轮询，让 pending 状态尽快消失
+      setTimeout(poll, 800);
+      // 兜底：60 秒后如果服务端还没出现这条消息，自动清除 pending（避免"待发送"卡死）
+      setTimeout(()=>{
+        const before=pendings.length;
+        pendings=pendings.filter(p=>p.id!==id);
+        if(pendings.length!==before){ savePendings(); poll(); }
+      }, 60000);
+    } else {
+      fallback();
+    }
+  };
   try{
     mqttClient=mqtt.connect(MQTT_URL,{
       username:MQTT_USER, password:MQTT_PASS,
