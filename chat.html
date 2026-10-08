@@ -102,7 +102,7 @@ async function poll(){
   try{
     const headers={"Accept":"application/vnd.github.raw"};
     if(etag)headers["If-None-Match"]=etag;
-    const r=await fetch(API,{headers:headers});
+    const r=await fetch(API,{headers:headers, cache:"no-store"});
     if(r.status===200){
       etag=r.headers.get("ETag");
       if(etag)localStorage.setItem("chat_etag",etag);
