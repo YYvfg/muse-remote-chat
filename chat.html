@@ -37,12 +37,19 @@ header .sub{font-size:12px;color:#888;margin-left:auto}
   <input id="inp" placeholder="输入消息…" autocomplete="off">
   <button id="send">发送</button>
 </div>
+<script src="https://cdn.jsdelivr.net/npm/mqtt@5.10.4/dist/mqtt.min.js"></script>
 <script>
 // 配置：公开仓库，匿名读取，无需任何 key（PAT 绝不进网页）
+// MQTT 上行：深圳 EMQX Serverless，WSS 直发；webpub 仅允许发布到下面这一个 topic
 const REPO = "YYvfg/muse-remote-chat";
 const API = "https://api.github.com/repos/" + REPO + "/contents/chat.json";
 const TO = "lyf1538709706@gmail.com";
 const SUBJECT = "[MuseChat]";
+const MQTT_URL = "wss://w9fb2c19.ala.cn-shenzhen.emqxsl.cn:8084/mqtt";
+const MQTT_TOPIC = "muse-chat/relay/859456181adb8c25292dbe06aa0f06bd";
+const MQTT_USER = "webpub";
+const MQTT_PASS = "REPLACE_AFTER_CONSOLE_SETUP";  // 控制台建好 webpub 用户后替换
+const MQTT_TIMEOUT = 4000;      // 4 秒连不上/发不出就回退到邮件，保证体验
 const POLL_OK = 20000;          // 正常轮询 20 秒（GPT review）
 const BACKOFF = [30000, 60000, 120000];
 
@@ -111,21 +118,50 @@ async function poll(){
   }
 }
 
+// ---- 上行：MQTT 直发优先，失败回退邮件 ----
+let mqttClient = null;
+function mqttCleanup(){ if(mqttClient){ try{mqttClient.end(true);}catch(e){} mqttClient=null; } }
+window.addEventListener("pagehide", mqttCleanup);
+window.addEventListener("beforeunload", mqttCleanup);
+
+function sendViaMail(id, text, ts){
+  const body="[chat-id:"+id+"]\n["+ts+"]\n"+text;
+  window.location.href="mailto:"+TO+"?subject="+encodeURIComponent(SUBJECT)+"&body="+encodeURIComponent(body);
+  showHint("已打开邮件，请点击发送");
+}
+
+function sendViaMqtt(id, text, ts, fallback){
+  if(typeof mqtt==="undefined"){ fallback(); return; }  // CDN 被挡
+  let done=false;
+  const finish=(ok)=>{ if(done)return; done=true; mqttCleanup(); ok?showHint("已发送"):fallback(); };
+  try{
+    mqttClient=mqtt.connect(MQTT_URL,{
+      username:MQTT_USER, password:MQTT_PASS,
+      keepalive:60, connectTimeout:MQTT_TIMEOUT,
+      reconnectPeriod:0, clean:true           // 单次发送，不自动重连
+    });
+  }catch(e){ finish(false); return; }
+  const timerId=setTimeout(()=>finish(false), MQTT_TIMEOUT+1000);
+  mqttClient.on("connect",()=>{
+    mqttClient.publish(MQTT_TOPIC, JSON.stringify({id:id,text:text,ts:ts}),
+      {qos:1}, (err)=>{ clearTimeout(timerId); finish(!err); });
+  });
+  mqttClient.on("error",()=>{ clearTimeout(timerId); finish(false); });
+}
+
 document.getElementById("send").onclick=()=>{
   const inp=document.getElementById("inp");
   const text=inp.value.trim();
   if(!text)return;
   const id=uuid();
   const ts=new Date().toLocaleString("zh-CN",{hour12:false});
-  const body="[chat-id:"+id+"]\n["+ts+"]\n"+text;
   pendings.push({id:id,text:text,ts:ts});
   savePendings();
   const box=document.getElementById("msgs");
   box.innerHTML+='<div class="msg user pending">'+esc(text)+'<div class="meta">待发送</div></div>';
   box.scrollTop=box.scrollHeight;
   inp.value="";
-  window.location.href="mailto:"+TO+"?subject="+encodeURIComponent(SUBJECT)+"&body="+encodeURIComponent(body);
-  showHint("已打开邮件，请点击发送");
+  sendViaMqtt(id, text, ts, ()=>sendViaMail(id, text, ts));
 };
 document.getElementById("inp").addEventListener("keydown",e=>{if(e.key==="Enter")document.getElementById("send").click();});
 
